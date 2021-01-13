@@ -173,13 +173,13 @@ CONFIGENTRY *DetectLinuxFATX(FATXPartition *partition) {
 	CONFIGENTRY *config=NULL, *currentConfigItem=NULL;
 	
 	if (LoadFATXFile(partition, "/linuxboot.cfg", &fileinfo)) {
-		//Root of E has a linuxboot.cfg in
+		//Root of partition has a linuxboot.cfg in it
 		config = (CONFIGENTRY *)malloc(sizeof(CONFIGENTRY));
 		config = ParseConfig(fileinfo.buffer, fileinfo.fileSize, NULL);
 		free(fileinfo.buffer);
 	}
 	else if (LoadFATXFile(partition, "/debian/linuxboot.cfg", &fileinfo)) {
-		//Try in /debian on E
+		//Try in /debian
 		config = (CONFIGENTRY *)malloc(sizeof(CONFIGENTRY));
 		config = ParseConfig(fileinfo.buffer, fileinfo.fileSize, "/debian");
 		free(fileinfo.buffer);
@@ -206,7 +206,7 @@ int LoadLinuxFATX(FATXPartition *partition, const OPTLINUX *optLinux) {
 	tempBuf = (u8*)INITRD_START;
 	if (!LoadFATXFilefixed(partition, optLinux->szKernel, &infokernel, tempBuf)) {
 		printk("Error loading kernel %s\n", optLinux->szKernel);
-		wait_ms(2000);
+		wait_ms(5000);
 		return false;
 	} else {
 		dwKernelSize = infokernel.fileSize;

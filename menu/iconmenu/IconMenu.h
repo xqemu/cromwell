@@ -20,6 +20,8 @@
 #define ICON_SOURCE_SLOT7 ICON_WIDTH*7
 #define ICON_SOURCE_SLOT8 ICON_WIDTH*8
 
+#define MAX_ICON_TITLE 18
+
 struct ICON;
 
 typedef struct ICON {

@@ -64,29 +64,36 @@ void IconMenuInit(void) {
 
 void InitFatXIcons(void) {
 	ICON *iconPtr=NULL;
-	u8 ba[512];
-	int driveId=0;
-	
-	if (tsaHarddiskInfo[driveId].m_fDriveExists && !tsaHarddiskInfo[driveId].m_fAtapi) {
-		memset(ba,0x00,512);
-		BootIdeReadSector(driveId, ba, 3, 0, 512);
-		if (!strncmp("BRFR",ba,4)) {
-			//Got a FATX formatted HDD
-			CONFIGENTRY *entry = (CONFIGENTRY*)DetectSystemFatX();
-			if (entry !=NULL) {
-				//There is a config file present.
-				iconPtr = malloc(sizeof(ICON));
-		   		iconPtr->iconSlot = ICON_SOURCE_SLOT4;
-				iconPtr->szCaption="FatX (E:)";
-				iconPtr->functionPtr = DrawBootMenu;
-				iconPtr->functionDataPtr = (void *)entry;
-		   		AddIcon(iconPtr);
-				//If we have fatx, mark it as default.
-				//If there are natives, they'll get priority shortly
-				selectedIcon = iconPtr;
-			}
-		}
+	CONFIGENTRY *entry = (CONFIGENTRY*)DetectSystemFatX();
+	CONFIGENTRY *countEntry;
+	int numEntries;
+
+	if (entry == NULL) {
+		return;
 	}
+	//Got a FATX formatted HDD; there are one or more config files present.
+	iconPtr = malloc(sizeof(ICON));
+ 	iconPtr->iconSlot = ICON_SOURCE_SLOT4;
+	iconPtr->szCaption = malloc(MAX_ICON_TITLE);
+	if (entry->nextConfigEntry == NULL) {
+		sprintf(iconPtr->szCaption, "FATX (%c:)", FATX_DRIVE_LETTERS[entry->partition]);
+	}
+	else {
+		numEntries = 1;
+		countEntry = entry;
+		while (countEntry->nextConfigEntry != NULL) {
+			numEntries += 1;
+			countEntry = countEntry->nextConfigEntry;
+		}
+		sprintf(iconPtr->szCaption, "FATX (%d)", numEntries);
+	}
+	iconPtr->functionPtr = DrawBootMenu;
+	iconPtr->functionDataPtr = (void *)entry;
+ 	AddIcon(iconPtr);
+
+	//If we have fatx, mark it as default.
+	//If there are natives, they'll get priority shortly
+	selectedIcon = iconPtr;
 }
 
 void InitNativeIcons(void) {

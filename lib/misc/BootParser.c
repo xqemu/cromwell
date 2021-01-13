@@ -40,6 +40,7 @@ CONFIGENTRY *ParseConfig(char *szBuffer, unsigned int fileLen, char *szPath) {
 			else {	
 				currentEntry->nextConfigEntry = malloc(sizeof(CONFIGENTRY));
 				memset(currentEntry->nextConfigEntry, 0x00, sizeof(CONFIGENTRY));
+				currentEntry->nextConfigEntry->previousConfigEntry = currentEntry;
 				currentEntry = (CONFIGENTRY*)currentEntry->nextConfigEntry;
 				strncpy(currentEntry->title, paramdata, strlen(paramdata));
 			}

@@ -10,6 +10,24 @@
 
 //#define FATX_INFO
 
+
+// Temporary struct used to load XBPartitioner data directly from disk.
+typedef struct
+{
+	char name[16];
+	u32  flags;
+	u32  start;
+	u32  size;
+	u32  reserved;
+} XBPartitionerTableEntry;
+
+// Temporary struct used to load XBPartitioner data directly from disk.
+typedef struct {
+	char                 magic[16];
+	char                 reserved[32];
+	XBPartitionerTableEntry partitions[FATX_XBPARTITIONER_PARTITIONS_MAX];
+} XBPartitionerTable;
+
 int checkForLastDirectoryEntry(unsigned char* entry) {
 
 	// if the filename length byte is 0 or 0xff,
@@ -87,8 +105,6 @@ int LoadFATXFile(FATXPartition *partition,char *filename, FATXFILEINFO *fileinfo
 }
 
 void PrintFAXPartitionTable(int nDriveIndex) {
-
-	u8 ba[512];
 	FATXPartition *partition = NULL;
 	FATXFILEINFO fileinfo;
 
@@ -96,7 +112,7 @@ void PrintFAXPartitionTable(int nDriveIndex) {
 	printk("FATX Partition Table:\n");
 	memset(&fileinfo,0,sizeof(FATXFILEINFO));
 
-	if(FATXSignature(nDriveIndex,SECTOR_SYSTEM,ba)) {
+	if(FATXSignature(nDriveIndex,SECTOR_SYSTEM)) {
 		VIDEO_ATTR=0xffe8e8e8;
 		printk("Partition SYSTEM\n");
 		partition = OpenFATXPartition(nDriveIndex,SECTOR_SYSTEM,SYSTEM_SIZE);
@@ -111,120 +127,220 @@ void PrintFAXPartitionTable(int nDriveIndex) {
 	VIDEO_ATTR=0xffc8c8c8;
 }
 
-int FATXSignature(int nDriveIndex,unsigned int block,u8 *ba) {
+int FATXSignature(int nDriveIndex, unsigned int partitionOffset) {
 
-	if(BootIdeReadSector(0, &ba[0], block, 0, 512)) {
+	unsigned char partitionInfo[FATX_PARTITION_MAGIC_LEN];
+	unsigned int readSize;
+	#ifdef FATX_DEBUG
+		//printk("FATXSignature: Read partition header\n");
+	#endif
+	// load the partition header
+	readSize = FATXRawRead(nDriveIndex, partitionOffset, 0, FATX_PARTITION_MAGIC_LEN, (char *)&partitionInfo);
+
+	if (readSize != FATX_PARTITION_MAGIC_LEN) {
+		VIDEO_ATTR=0xffe8e8e8;
+	#ifdef FATX_INFO
+			printk("FATXSignature: Out of data reading partition header drv %d offset 0x%X\n", nDriveIndex, partitionOffset);
+	#endif
+		return false;
+	}
+	if (strncmp(partitionInfo, "FATX", FATX_PARTITION_MAGIC_LEN)) {
 		VIDEO_ATTR=0xffe8e8e8;
 #ifdef FATX_INFO
-		printk("FATXSignature : Unable to read FATX sector\n");
+		printk("FATXSignature: No FATX partition magic found at drv %d offset 0x%X\n", nDriveIndex, partitionOffset);
 #endif
 		return false;
-	} else {
-		if( (ba[0]=='F') && (ba[1]=='A') && (ba[2]=='T') && (ba[3]=='X') ) {
-			return true;
-		} else {
-			return false;
+	}
+	return true;
+}
+
+void LoadStockPartitionTable(int driveId, FATXPartitionTable *partitionTable) {
+	#ifdef FATX_INFO
+	//printk("LoadStockPartitionTable\n");
+	#endif
+	partitionTable->partitions[0] = OpenFATXPartition(driveId, SECTOR_STORE, STORE_SIZE);
+	partitionTable->partitions[1] = OpenFATXPartition(driveId, SECTOR_SYSTEM, SYSTEM_SIZE);
+	partitionTable->partitions[2] = OpenFATXPartition(driveId, SECTOR_CACHE1, CACHE1_SIZE);
+	partitionTable->partitions[3] = OpenFATXPartition(driveId, SECTOR_CACHE2, CACHE2_SIZE);
+	partitionTable->partitions[4] = OpenFATXPartition(driveId, SECTOR_CACHE3, CACHE3_SIZE);
+	for (int partIdx = 0; partIdx < FATX_STOCK_PARTITIONS_MAX; partIdx++) {
+		if (partitionTable->partitions[partIdx] != NULL) {
+			partitionTable->nPartitions++;
 		}
 	}
 }
 
+void LoadXBPartitionerTable(int driveId, FATXPartitionTable *partitionTable) {
+	XBPartitionerTable xbPartTable;
+	XBPartitionerTableEntry xbPartEntry;
+	memset(&xbPartTable,0,sizeof(XBPartitionerTable));
+
+	BootIdeReadSector(driveId, &xbPartTable, SECTOR_CONFIG, 0, sizeof(XBPartitionerTable));
+	if (strncmp("****PARTINFO****", xbPartTable.magic, 16)) {
+		#ifdef FATX_INFO
+		printk("No XBPartitioner partition table detected\n");
+		#endif
+	}
+	#ifdef FATX_INFO
+	printk("LoadXBPartitionerTable: XBPartitioner partition table detected on drive %d\n", driveId);
+	#endif
+	for (int partIdx = 0; partIdx < FATX_XBPARTITIONER_PARTITIONS_MAX; partIdx++) {
+		xbPartEntry = xbPartTable.partitions[partIdx];
+		if (!(xbPartEntry.flags & FATX_XBPARTITIONER_PARTITION_IN_USE)) {
+			continue;
+		}
+		#ifdef FATX_INFO
+		// printk("Found XBPartitioner entry start 0x%X size 0x%X\n", xbPartEntry.start, xbPartEntry.size);
+		#endif
+		partitionTable->partitions[partIdx] = OpenFATXPartition(driveId, xbPartEntry.start, xbPartEntry.size);
+		if (partitionTable->partitions[partIdx] == NULL) {
+			#ifdef FATX_INFO
+			printk("Could not open XBPartitioner drive %d partindex %d start %X size %X\n", driveId, partIdx, xbPartEntry.start, xbPartEntry.size);
+			#endif
+		}
+		else {
+			partitionTable->nPartitions+=1;
+		}
+	}
+	if (partitionTable->nPartitions == 0) {
+		#ifdef FATX_DBEBUG
+		printk("Could not load any XBPartitioner partitions, but table magic found?\n");
+		#endif
+	}
+}
+
+// This needs to be freed using CloseFATXPartitionTable, which also closes its
+// component partitions.
+FATXPartitionTable *OpenFatXPartitionTable(int driveId) {
+	FATXPartitionTable* partitionTable;
+	u8 ba[4];
+
+	// Check for filesystem magic number at sector 3
+	memset(ba,0x00,FATX_DISK_BRFR_MAGIC_LEN);
+	BootIdeReadSector(driveId, ba, FATX_DISK_BRFR_MAGIC_SECTOR, 0, FATX_DISK_BRFR_MAGIC_LEN);
+
+	if (strncmp("BRFR",ba,FATX_DISK_BRFR_MAGIC_LEN)) {
+		#ifdef FATX_DEBUG
+			printk("OpenFatXPartitionTable drive %d: Couldn't find FATX magic number\n", driveId);
+		#endif
+		return NULL;
+	}
+
+	partitionTable = malloc(sizeof(FATXPartitionTable));
+	if (partitionTable == NULL) {
+		#ifdef FATX_DEBUG
+				printk("OpenFatXPartitionTable: Out of memory\n");
+		#endif
+		return NULL;
+	}
+	memset(partitionTable,0,sizeof(FATXPartitionTable));
+
+	LoadXBPartitionerTable(driveId, partitionTable);
+	if (partitionTable->nPartitions == 0) {
+		#ifdef FATX_INFO
+		printk("No XBPartitioner partitions found; checking for standard partition table\n");
+		#endif
+		LoadStockPartitionTable(driveId, partitionTable);
+	}
+
+	if (partitionTable->nPartitions == 0) {
+		#ifdef FATX_INFO
+		printk("No FATX partitions found\n");
+		#endif
+		CloseFATXPartitionTable(partitionTable);
+		return NULL;
+	}
+
+	#ifdef FATX_INFO
+	printk("Found %d partitions\n", partitionTable->nPartitions);
+	#endif
+	return partitionTable;
+
+}
+
 FATXPartition *OpenFATXPartition(int nDriveIndex,
-		unsigned int partitionOffset,
-		u_int64_t partitionSize) {
-	unsigned char partitionInfo[FATX_PARTITION_HEADERSIZE];
+	unsigned int partitionOffset,
+	unsigned int partitionSize) {
+
 	FATXPartition *partition;
-	int readSize;
+	unsigned int clusterSizeKB;
 	unsigned int chainTableSize;
 
-#ifdef FATX_DEBUG
-	printk("OpenFATXPartition : Read partition header\n");
-#endif
-	// load the partition header
-	readSize = FATXRawRead(nDriveIndex, partitionOffset, 0,
-			FATX_PARTITION_HEADERSIZE, (char *)&partitionInfo);
-
-  	if (readSize != FATX_PARTITION_HEADERSIZE) {
-		VIDEO_ATTR=0xffe8e8e8;
-#ifdef FATX_INFO
-		printk("OpenFATXPartition : Out of data while reading partition header\n");
-#endif
+	// Checks for "FATX" magic
+	if (!FATXSignature(nDriveIndex, partitionOffset)) {
 		return NULL;
 	}
 
-	// check the magic
-	if (*((u_int32_t*) &partitionInfo) != FATX_PARTITION_MAGIC) {
-		VIDEO_ATTR=0xffe8e8e8;
-#ifdef FATX_INFO
-		printk("OpenFATXPartition : No FATX partition found at requested offset\n");
-#endif
-		return NULL;
-	}
-
-#ifdef FATX_DEBUG
-	printk("OpenFATXPartition : Allocating Partition struct\n");
-#endif
-	// make up new structure
-	partition = (FATXPartition*) malloc(sizeof(FATXPartition));
+	partition = malloc(sizeof(FATXPartition));
 	if (partition == NULL) {
-#ifdef FATX_INFO
+		VIDEO_ATTR=0xffe8e8e8;
+#ifdef FATX_DEBUG
 		printk("OpenFATXPartition : Out of memory\n");
 #endif
 		return NULL;
 	}
-#ifdef FATX_DEBUG
-	printk("OpenFATXPartition : Allocating Partition struct done\n");
-#endif
 	memset(partition,0,sizeof(FATXPartition));
 
 	// setup the easy bits
 	partition->nDriveIndex = nDriveIndex;
 	partition->partitionStart = partitionOffset;
 	partition->partitionSize = partitionSize;
-	partition->clusterSize = 0x4000;
-	partition->clusterCount = partition->partitionSize / 0x4000;
-	partition->chainMapEntrySize = (partition->clusterCount >= 0xfff4) ? 4 : 2;
 
-	// Now, work out the size of the cluster chain map table
-	chainTableSize = partition->clusterCount * partition->chainMapEntrySize;
-	if (chainTableSize % FATX_CHAINTABLE_BLOCKSIZE) {
-		// round up to nearest FATX_CHAINTABLE_BLOCKSIZE bytes
-		chainTableSize = ((chainTableSize / FATX_CHAINTABLE_BLOCKSIZE) + 1)
-				* FATX_CHAINTABLE_BLOCKSIZE;
+	// calculate cluster size
+	clusterSizeKB = 16;
+	u_int64_t compare = 0x20000000;
+	while (partitionSize > compare)
+	{
+		compare *= 2;
+		clusterSizeKB *= 2;
 	}
+	partition->clusterSize = clusterSizeKB * 0x400;
+	partition->clusterCount = (partitionSize / (partition->clusterSize / FATX_SECTOR_SIZE)) + 1;
 
-#ifdef FATX_DEBUG
-	printk("OpenFATXPartition : Allocating chaintable struct\n");
-#endif
-  	// Load the cluster chain map table
-	partition->clusterChainMap.words = (u_int16_t*) malloc(chainTableSize);
-    	if (partition->clusterChainMap.words == NULL) {
-		VIDEO_ATTR=0xffe8e8e8;
-#ifdef FATX_INFO
-		printk("OpenFATXPartition : Out of memory\n");
-#endif
-		return NULL;
-	}
+	// The chain map entry size is 2 if there are < 65525 clusters, and the
+	// filesystem is "FATX16".  Usually, the chain map entry size is 4.
+	partition->chainMapEntrySize = (partition->clusterCount >= 0xfff4) ? 4 : 2; // 65525
 
-#ifdef FATX_DEBUG
-	printk("Part stats : CL Count	%d \n", partition->clusterCount);
-	printk("Part stats : CL Size	%d \n", partition->clusterSize);
-	printk("Part stats : CM Size	%d \n", partition->chainMapEntrySize);
-	printk("Part stats : Table Size	%d \n", chainTableSize);
-	printk("Part stats : Part Size	%d \n", partition->partitionSize);
-#endif
+	// Calculate the size of the chain map; it gets rounded up even if
+	// the chainTableSize % 4096 == 0
+	chainTableSize = (partition->clusterCount * partition->chainMapEntrySize);
+	chainTableSize += 4096 - chainTableSize % 4096;
 
-	readSize = FATXRawRead(nDriveIndex, partitionOffset, FATX_PARTITION_HEADERSIZE,
-			chainTableSize, (char *)partition->clusterChainMap.words);
+	partition->cluster1Address =  FATX_CHAINTABLE_BLOCKSIZE + chainTableSize;
+	partition->nCachedChainMapBlock = -1;
 
-    	if (readSize != chainTableSize) {
-		VIDEO_ATTR=0xffe8e8e8;
-#ifdef FATX_INFO
-		printk("Out of data while reading cluster chain map table\n");
-#endif
-	}
-	partition->cluster1Address = ( ( FATX_PARTITION_HEADERSIZE + chainTableSize) );
+	#ifdef FATX_INFO
+	printk("OpenFATXPartition: Drv: %d, start: 0x%X, nSec: 0x%X ", nDriveIndex, partition->partitionStart, partition->partitionSize);
+	printk("nClus: 0x%X, cSiz: %dKB\n", partition->clusterCount, clusterSizeKB, partition->clusterSize);
+	printk("OpenFATXPartition: chaintableSize: 0x%X chaintableEntrySize: %d cl1 addr: 0x%X\n",
+				 chainTableSize, partition->chainMapEntrySize, partition->cluster1Address);
+	#endif
 
 	return partition;
+}
+
+bool FATXCacheChainMapBlock(FATXPartition *partition, int blockNum) {
+	unsigned int bytesRead = 0;
+	if (partition->nCachedChainMapBlock < 0) {
+			partition->cachedChainMapBlock = (u_int32_t *)malloc(FATX_CHAINTABLE_BLOCKSIZE);
+	}
+#ifdef FATX_INFO
+	// printk("FATXCacheChainMapBlock: caching block num %d\n", blockNum);
+#endif
+	bytesRead = FATXRawRead(partition->nDriveIndex, partition->partitionStart,
+													FATX_CHAINTABLE_BLOCKSIZE + FATX_CHAINTABLE_BLOCKSIZE * blockNum,
+													FATX_CHAINTABLE_BLOCKSIZE, (u8*)partition->cachedChainMapBlock);
+	if (bytesRead != FATX_CHAINTABLE_BLOCKSIZE) {
+		VIDEO_ATTR=0xffe8e8e8;
+#ifdef FATX_DEBUG
+		printk("FATXCacheChainMapBlock : out of data??\n");
+#endif
+		partition->nCachedChainMapBlock = -1;
+		return false;
+	}
+	partition->nCachedChainMapBlock = blockNum;
+
+	return true;
 }
 
 void DumpFATXTree(FATXPartition *partition) {
@@ -561,20 +677,35 @@ u_int32_t getNextClusterInChain(FATXPartition* partition, int clusterId) {
 	u_int32_t rootFatMarker = 0;
 	u_int32_t maxCluster = 0;
 
-	// check
+	u_int32_t cachedChainMapBlockStartId;
+	u_int32_t targetChainMapBlockNum = (clusterId * partition->chainMapEntrySize) / 4096;
+	if (partition->nCachedChainMapBlock != targetChainMapBlockNum) {
+		if (!FATXCacheChainMapBlock(partition, targetChainMapBlockNum)) {
+			printk("Error caching chain map block %d\n", targetChainMapBlockNum);
+			return -1;
+		}
+	}
+	cachedChainMapBlockStartId = partition->nCachedChainMapBlock * (4096 / partition->chainMapEntrySize);
+	if (clusterId < cachedChainMapBlockStartId || clusterId >= clusterId + 4096 / partition->chainMapEntrySize) {
+		VIDEO_ATTR=0xffe8e8e8;
+		printk("getNextClusterInChain : Wrong block cached; block start id %d, expected %d\n", cachedChainMapBlockStartId, clusterId);
+		return -1;
+	}
+
 	if (clusterId < 1) {
 		VIDEO_ATTR=0xffe8e8e8;
 		printk("getNextClusterInChain : Attempt to access invalid cluster: %i\n", clusterId);
+		return -1;
 	}
 
 	// get the next ID
 	if (partition->chainMapEntrySize == 2) {
-		nextClusterId = partition->clusterChainMap.words[clusterId];
-	        eocMarker = 0xffff;
+		nextClusterId = ((uint16_t *)partition->cachedChainMapBlock)[clusterId - cachedChainMapBlockStartId];
+	  eocMarker = 0xffff;
 		rootFatMarker = 0xfff8;
 		maxCluster = 0xfff4;
 	} else if (partition->chainMapEntrySize == 4) {
-		nextClusterId = partition->clusterChainMap.dwords[clusterId];
+		nextClusterId = partition->cachedChainMapBlock[clusterId - cachedChainMapBlockStartId];
 		eocMarker = 0xffffffff;
 		rootFatMarker = 0xfffffff8;
 		maxCluster = 0xfffffff4;
@@ -594,7 +725,7 @@ u_int32_t getNextClusterInChain(FATXPartition* partition, int clusterId) {
 		printk("getNextClusterInChain : Cluster chain problem: Next cluster after %i is unallocated!\n", clusterId);
         }
 	if (nextClusterId > maxCluster) {
-		printk("getNextClusterInChain : Cluster chain problem: Next cluster after %i has invalid value: %i\n", clusterId, nextClusterId);
+		printk("getNextClusterInChain : Next cluster after %i has invalid value: %i, 0x%X\n", clusterId, nextClusterId);
 	}
 	
 	// OK!
@@ -612,13 +743,15 @@ void LoadFATXCluster(FATXPartition* partition, int clusterId, unsigned char* clu
 	readSize = FATXRawRead(partition->nDriveIndex, partition->partitionStart,
 			clusterAddress, partition->clusterSize, clusterData);
 
-        if (readSize != partition->clusterSize) {
+  if (readSize != partition->clusterSize) {
 		printk("LoadFATXCluster : Out of data while reading cluster %i\n", clusterId);
 	}
 }
 	    
 
-int FATXRawRead(int drive, int sector, unsigned long long byte_offset, int byte_len, char *buf) {
+
+
+int FATXRawRead(int drive, unsigned int sector, unsigned long long byte_offset, long byte_len, char *buf) {
 
 	int byte_read;
 	
@@ -647,7 +780,7 @@ int FATXRawRead(int drive, int sector, unsigned long long byte_offset, int byte_
 		} else {
 			if(BootIdeReadSector(drive, buf, sector, 0, nThisTime)) {
 				VIDEO_ATTR=0xffe8e8e8;
-				printk("Unable to get first sector\n");
+				printk("Unable to get sector 0x%X\n", sector);
 				return false;
 			}
 			buf+=nThisTime;
@@ -660,9 +793,20 @@ int FATXRawRead(int drive, int sector, unsigned long long byte_offset, int byte_
 }
 
 void CloseFATXPartition(FATXPartition* partition) {
-	if(partition != NULL) {
-		free(partition->clusterChainMap.words);
+	if (partition != NULL) {
+		if (partition->nCachedChainMapBlock >= 0) {
+			free(partition->cachedChainMapBlock);
+		}
 		free(partition);
 		partition = NULL;
+	}
+}
+
+void CloseFATXPartitionTable(FATXPartitionTable* partitionTable) {
+	if (partitionTable != NULL) {
+		for (int partIdx = 0; partIdx < FATX_XBPARTITIONER_PARTITIONS_MAX; partIdx++) {
+			CloseFATXPartition(partitionTable->partitions[partIdx]);
+		}
+		free(partitionTable);
 	}
 }

@@ -27,6 +27,8 @@
 
 #define GRUB_REQUEST_SIZE (256+4)
 
+const FATX_PARTITION_SORT_ORDER[FATX_XBPARTITIONER_PARTITIONS_MAX] = { 1, 0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 2, 3, 4 };
+
 char *InitGrubRequest(int size, int drive, int partition) {
 	char *szGrub;
 
@@ -66,6 +68,8 @@ void FillConfigEntries(CONFIGENTRY *config, enum BootTypes bootType, int drive, 
 			currentConfigItem->partition = partition;
 			break;
 		case BOOT_FATX:
+			currentConfigItem->drive = drive;
+			currentConfigItem->partition = partition;
 			break;
 		case BOOT_CDROM:
 			currentConfigItem->drive = drive;
@@ -85,6 +89,7 @@ CONFIGENTRY *AddNestedConfigEntry(CONFIGENTRY *config, CONFIGENTRY *nested, char
 		while (config->nextConfigEntry != NULL)
 			config = config->nextConfigEntry;
 		config->nextConfigEntry = (CONFIGENTRY *)malloc(sizeof(CONFIGENTRY));
+		config->nextConfigEntry->previousConfigEntry = config;
 		config = config->nextConfigEntry;
 	} else {
 		/* No config entry, create new one */
@@ -94,6 +99,9 @@ CONFIGENTRY *AddNestedConfigEntry(CONFIGENTRY *config, CONFIGENTRY *nested, char
 	memset(config, 0x00, sizeof(CONFIGENTRY));
 	strncpy(config->title, title, sizeof(config->title));
 	config->nestedConfigEntry = nested;
+	config->bootType = nested->bootType;
+	config->drive = nested->drive;
+	config->partition = nested->partition;
 	return root;
 }
 
@@ -135,47 +143,78 @@ int BootFromNative(CONFIGENTRY *config) {
 	return result;
 }
 
-CONFIGENTRY *DetectSystemFatX(void) {
+CONFIGENTRY *DetectSystemFatX() {
+	FATXPartitionTable *partitionTable;
 	CONFIGENTRY *config = NULL;
 	CONFIGENTRY *cfgLinux;
 	CONFIGENTRY *cfgReactOS;
-	FATXPartition *partition;
+	char entryName[MAX_CONFIG_TITLE];
+	int partIdx;
 
-	partition = OpenFATXPartition(0, SECTOR_STORE, STORE_SIZE);
-	if (!partition)
-		return NULL;
+	for (int driveId = 0; driveId < 1; driveId++) {
+		// Check if it's a DVD/CD drive
+		if (!tsaHarddiskInfo[driveId].m_fDriveExists) {
+			printk("DetectSystemFatX: Drive %d doesn't exist\n", driveId);
+			continue;
+		}
+		else if (tsaHarddiskInfo[driveId].m_fAtapi) {
+			#ifdef FATX_DEBUG
+			printk("DetectSystemFatX: Drive %d is ATAPI\n", driveId);
+			#endif
+			continue;
+		}
 
-	cfgLinux = DetectLinuxFATX(partition);
-	if (cfgLinux != NULL) {
-		FillConfigEntries(cfgLinux, BOOT_FATX, 0, 0);
-		config = AddNestedConfigEntry(config, cfgLinux, "Linux");
+		partitionTable = OpenFatXPartitionTable(driveId);
+		if (partitionTable == NULL) {
+			continue;
+		}
+
+		for (int sortPartIdx = 0; sortPartIdx < FATX_XBPARTITIONER_PARTITIONS_MAX; sortPartIdx++) {
+			partIdx = FATX_PARTITION_SORT_ORDER[sortPartIdx];
+			if (partitionTable->partitions[partIdx] == NULL) {
+				continue;
+			}
+
+			cfgLinux = DetectLinuxFATX(partitionTable->partitions[partIdx]);
+			if (cfgLinux != NULL) {
+				// TODO: Indicate non-default HDD here once that's tested and working
+				sprintf(entryName, "Linux (%c:)", FATX_DRIVE_LETTERS[partIdx]);
+				FillConfigEntries(cfgLinux, BOOT_FATX, driveId, partIdx);
+				config = AddNestedConfigEntry(config, cfgLinux, entryName);
+			}
+
+			cfgReactOS = DetectReactOSFATX(partitionTable->partitions[partIdx]);
+			if (cfgReactOS != NULL) {
+				FillConfigEntries(cfgReactOS, BOOT_FATX, driveId, partIdx);
+				// TODO: Indicate non-default HDD here once that's tested and working
+				sprintf("ReactOS (%c:)", FATX_DRIVE_LETTERS[partIdx]);
+				config = AddNestedConfigEntry(config, cfgReactOS, entryName);
+			}
+		}
+		CloseFATXPartitionTable(partitionTable);
 	}
-	cfgReactOS = DetectReactOSFATX(partition);
-	if (cfgReactOS != NULL) {
-		FillConfigEntries(cfgReactOS, BOOT_FATX, 0, 0);
-		config = AddNestedConfigEntry(config, cfgReactOS, "ReactOS");
-	}
-	CloseFATXPartition(partition);
-
 	return config;
 }
 
 int BootFromFatX(CONFIGENTRY *config) {
-	FATXPartition *partition;
+	FATXPartitionTable* partitionTable = OpenFatXPartitionTable(config->drive);
+	FATXPartition* partition;
 	int result = 0;
 
 	DVDTrayClose();
 
-	partition = OpenFATXPartition(0, SECTOR_STORE, STORE_SIZE);
-	if (!partition)
+	partition = partitionTable->partitions[config->partition];
+	if (!partition) {
+		CloseFATXPartitionTable(partitionTable);
 		return false;
+	}
 
 	if (config->bootSystem == SYS_LINUX)
 		result = LoadLinuxFATX(partition, &config->opt.Linux);
 	if (config->bootSystem == SYS_REACTOS)
 		result = LoadReactOSFATX(partition, config);
-	CloseFATXPartition(partition);
 
+	CloseFATXPartitionTable(partitionTable);
 	return result;
 }
 

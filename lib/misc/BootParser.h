@@ -6,6 +6,8 @@
 #define MAX_CONFIG_FILESIZE 1024*256
 #define MAX_LINE 2048
 
+#define MAX_CONFIG_TITLE 24
+
 struct CONFIGENTRY;
 
 enum BootTypes {
@@ -37,15 +39,19 @@ typedef struct CONFIGENTRY {
 	int  isDefault;
 	enum BootTypes bootType;
 	enum BootSystems bootSystem;
-	char title[15];
+	char title[MAX_CONFIG_TITLE];
 	char szPath[MAX_LINE];
 	union {
 		struct OPTLINUX Linux;
 		struct OPTMULTIBOOT Multiboot;
 	} opt;
+
+	// Linked list of menu items
 	struct CONFIGENTRY *previousConfigEntry;
 	struct CONFIGENTRY *nextConfigEntry;
+
 	struct CONFIGENTRY *nestedConfigEntry;
+
 } CONFIGENTRY;
 
 CONFIGENTRY* ParseConfig(char *szBuffer, unsigned int fileLen, char *szPath);
