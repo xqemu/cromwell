@@ -19,11 +19,25 @@
 #define PCI_CFG_ADDR 0x0CF8
 #define PCI_CFG_DATA 0x0CFC
 
+#define MTRR_DEF 0x2ff
+#define MTRR_DEF_TYPE 0x800
+#define MTRR_PHYSBASE 0x200
+#define MTRR_LAST 0x20F
+#define WB_CACHE 6
+#define BASE0_H 0
+#define BASE0_L WB_CACHE
+#define MASK0_H 0x0F
+#define MASK0_L 0xFC000800
+#define BASE1_H 0
+#define BASE1_L 0xFFF80005
+#define MASK1_H 0x0F
+#define MASK1_L 0x0FFF80800
 
 #define TIMER_IO   0x8008
 #define TIMER_FREQ 0x369E99
 
 #define I2C_IO_BASE 0xC000
+#define SMBUS       I2C_IO_BASE
 
 #define SERIAL_PORT 0x3F8
 #define SERIAL_IRQ  4
@@ -67,6 +81,13 @@
 #define DEV_1f 0x1f
 
 #define FUNC_0 0
+#define FUNC_1 1
+#define FUNC_2 2
+#define FUNC_3 3
+#define FUNC_4 4
+#define FUNC_5 5
+#define FUNC_6 6
+#define FUNC_7 7
 /*
 #define boot_post_macro(value)                     \
 		movb    $(value), %al                           ;\
