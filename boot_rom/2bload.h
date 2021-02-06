@@ -10,7 +10,7 @@
  *                                                                         *
  ***************************************************************************/
 
-#include "2bconsts.h"
+#include "consts.h"
 #include "stdint.h"
 #include "cromwell_types.h"
 
@@ -85,6 +85,10 @@ int I2cResetFrontpanelLed(void);
 
 ////////// BootResetActions.c
 
+#define readl(addr) (*(volatile unsigned int *) (addr))
+#define writel(b,addr) ((*(volatile unsigned int *) (addr)) = (b))
+
+void BootSystemInitialization(void);
 void BootStartBiosLoader(void);
 
 ///////// BootPerformPicChallengeResponseAction.c

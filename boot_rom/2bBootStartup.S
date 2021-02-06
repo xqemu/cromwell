@@ -23,7 +23,7 @@
 	Xcalibur support by Lehner Franz (franz@caos.at) 
 */
  
-#include "2bconsts.h"
+#include "consts.h"
  
 #define xcode_peek(val1) .byte 0x2; .long val1 ; .long 0x0 ;
 #define xcode_poke(val1,val2) .byte 0x3; .long val1 ; .long val2 ;
@@ -44,9 +44,6 @@
 #define xcode_goto(val1) .byte 0x9; .long 0x0; .long (9*(val1-1));
 
 #define xcode_END(val1) .byte 0xEE; .long val1 ; .long 0x0;
-
-#define SMBUS 		0x0000c000
-
 
 #define SMB_xcode_Write(val1,val2); 	xcode_outb(SMBUS+8, val1); \
 					xcode_outb(SMBUS+6, val2); \
@@ -106,7 +103,14 @@
 	
 	//The bytecode interpreter begins here
 	.org 0x80
-#include "Xcodes.h"
+
+	// Note: X-codes are now translated to C code in BootSystemInitialization()
+
+	// overflow trick
+	xcode_poke(0x00000000, 0xfc1000ea);
+	xcode_poke(0x00000004, 0x000008ff);
+
+	xcode_END(0x806);
 
 	// Note: never change this from offset 0x1000 ....
 	// This is the Main Entry point ....        
@@ -338,31 +342,9 @@ reload_cs:
 	xor %eax, %eax
 	mov %eax, %fs
 	mov %eax, %gs
-	
-	movl	$ 0x1ffff0,%esp
 
-	mov	$0x8, %al
-	mov	$0x61, %dx
-	out	%al, %dx
+	movl	$0x1ffff0, %esp
 
-	// Enable IDE and NIC
-	mov 	$0x8000088C, %eax 
-	movw 	$0xcf8, %dx 
-	outl	%eax, %dx 
-	movw 	$0xcfc, %dx 
-	movl 	$0x40000000, %eax 
-	outl	%eax, %dx
-	
-      	
-	// CPU Whoami   ? sesless ?
-	mov 	$0x80000080, %eax 
-	movw 	$0xcf8, %dx 
-	outl	%eax, %dx 
-	movw 	$0xcfc, %dx 
-	movl 	$0x100, %eax 
-	outl	%eax, %dx 
-
-        
 	// this can be found in BootResetAction.c
-	jmp 	BootStartBiosLoader  
-                         
+	jmp 	BootStartBiosLoader
+
